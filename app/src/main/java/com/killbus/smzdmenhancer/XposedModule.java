@@ -2,16 +2,17 @@ package com.killbus.smzdmenhancer;
 
 import com.killbus.smzdmenhancer.utils.Logger;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
-import java.util.List;
-
 /**
  * Main Xposed module entry point
- * Implements hybrid hooking strategy for maximum compatibility
+ * Direct response String hooking strategy - simplest and most reliable
  */
 public class XposedModule implements IXposedHookLoadPackage {
     private static final String TARGET_PACKAGE = "com.smzdm.client.android";
@@ -46,17 +47,16 @@ public class XposedModule implements IXposedHookLoadPackage {
     }
     
     /**
-     * Initialize all hooks with the app's classloader
-     * Using OkHttp Response interception - the simplest and most reliable approach
+     * Initialize hooks - Direct response String hooking
      */
     private void initializeHooks(ClassLoader classLoader) {
         try {
-            // Primary Strategy: Hook OkHttp Response body (intercepts raw JSON)
-            hookOkHttpResponse(classLoader);
+            // Hook the network callback interface bm.e<String>.onSuccess(String)
+            // This is called with the raw JSON response before parsing
+            hookNetworkCallback(classLoader);
             
             Logger.info("All hooks initialized successfully");
             
-            // Show Toast notification if enabled
             if (Config.SHOW_HOOK_SUCCESS_TOAST) {
                 showToast(classLoader, "✅ SMZDM Enhancer Activated");
             }
@@ -69,215 +69,158 @@ public class XposedModule implements IXposedHookLoadPackage {
     }
     
     /**
-     * Hook OkHttp ResponseBody to intercept and modify raw JSON response
-     * This is the simplest and most reliable approach:
-     * - Works at network layer before any parsing
-     * - No need to track obfuscated class names
-     * - Directly modifies the JSON string
+     * Hook FollowSubRulesVM.requestFeedList callback
+     * VERIFIED from sources: 
+     * - FollowSubRulesVM.java line 64: private final String f20026f = "https://dingyue-api.smzdm.com/home/list"
+     * - This ViewModel specifically handles the follow feed list
      */
-    private void hookOkHttpResponse(ClassLoader classLoader) {
+    private void hookNetworkCallback(ClassLoader classLoader) {
         try {
-            // Hook okhttp3.ResponseBody.string() method
-            Class<?> responseBodyClass = XposedHelpers.findClass("okhttp3.ResponseBody", classLoader);
+            // Hook the specific ViewModel's inner callback class
+            // From FollowSubRulesVM$a$a$a (the callback for /home/list request)
+            Class<?> followSubRulesVMClass = XposedHelpers.findClass(
+                "com.smzdm.client.android.module.guanzhu.subrules.FollowSubRulesVM",
+                classLoader
+            );
             
-            XposedHelpers.findAndHookMethod(
-                responseBodyClass,
-                "string",
-                new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        String originalResponse = (String) param.getResult();
-                        
-                        // Only process responses from our target API
-                        if (originalResponse != null && originalResponse.contains("\"rows\"")) {
-                            // Check if it's a follow feed response
-                            if (originalResponse.contains("\"article_id\"") || 
-                                originalResponse.contains("\"article_title\"")) {
+            // Find the inner class that implements bm.e
+            // Pattern: FollowSubRulesVM$a$a$a implements bm.e<String>
+            Class<?>[] declaredClasses = followSubRulesVMClass.getDeclaredClasses();
+            for (Class<?> innerClass : declaredClasses) {
+                // Check if this class implements bm.e
+                Class<?>[] interfaces = innerClass.getInterfaces();
+                boolean implementsCallback = false;
+                for (Class<?> iface : interfaces) {
+                    if (iface.getName().equals("bm.e")) {
+                        implementsCallback = true;
+                        break;
+                    }
+                }
+                
+                if (implementsCallback) {
+                    Logger.info("Found callback class: " + innerClass.getName());
+                    
+                    // Hook onSuccess method of this specific callback
+                    XposedHelpers.findAndHookMethod(
+                        innerClass,
+                        "onSuccess",
+                        Object.class,
+                        new XC_MethodHook() {
+                            @Override
+                            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                                Object response = param.args[0];
                                 
-                                Logger.info("Intercepting API response, processing JSON...");
-                                
-                                try {
-                                    // Parse and filter the JSON
-                                    String modifiedResponse = filterJsonResponse(originalResponse);
+                                if (response instanceof String) {
+                                    String jsonStr = (String) response;
+                                    Logger.info("*** Intercepted /home/list response, length: " + jsonStr.length());
                                     
-                                    // Replace the response
-                                    param.setResult(modifiedResponse);
-                                    
-                                    Logger.info("JSON response filtered successfully");
-                                } catch (Exception e) {
-                                    Logger.error("Failed to filter JSON response: " + e.getMessage(), e);
-                                    // Keep original response on error
+                                    try {
+                                        String filteredJson = filterJsonResponse(jsonStr);
+                                        if (filteredJson != null && !filteredJson.equals(jsonStr)) {
+                                            param.args[0] = filteredJson;
+                                            Logger.info("*** Response filtered successfully");
+                                        }
+                                    } catch (Exception e) {
+                                        Logger.error("Error filtering response", e);
+                                    }
                                 }
                             }
                         }
-                    }
+                    );
+                    Logger.info("Successfully hooked callback: " + innerClass.getName());
                 }
-            );
+            }
             
-            Logger.info("Successfully hooked OkHttp ResponseBody.string()");
         } catch (Exception e) {
-            Logger.error("Failed to hook OkHttp ResponseBody", e);
+            Logger.error("Failed to hook FollowSubRulesVM callback", e);
         }
     }
     
     /**
-     * Filter JSON response by removing articles that don't meet criteria
-     * Uses simple string manipulation to avoid heavy JSON parsing
+     * Filter JSON response string
+     * Removes articles that don't meet the criteria
      */
-    private String filterJsonResponse(String jsonResponse) {
+    private String filterJsonResponse(String jsonStr) {
         try {
-            // Use org.json which is available in Android
-            org.json.JSONObject jsonObj = new org.json.JSONObject(jsonResponse);
+            JSONObject root = new JSONObject(jsonStr);
             
-            // Check if it has data.rows structure
-            if (!jsonObj.has("data")) {
-                return jsonResponse;
+            // Check if this has the expected structure
+            if (!root.has("data")) {
+                return null;
             }
             
-            org.json.JSONObject data = jsonObj.getJSONObject("data");
+            JSONObject data = root.getJSONObject("data");
             if (!data.has("rows")) {
-                return jsonResponse;
+                return null;
             }
             
-            org.json.JSONArray rows = data.getJSONArray("rows");
-            Logger.debug("Found " + rows.length() + " rows in response");
+            JSONArray rows = data.getJSONArray("rows");
+            JSONArray filteredRows = new JSONArray();
             
-            // Filter rows
-            org.json.JSONArray filteredRows = new org.json.JSONArray();
-            int droppedCount = 0;
+            int totalDropped = 0;
             
             for (int i = 0; i < rows.length(); i++) {
-                org.json.JSONObject row = rows.getJSONObject(i);
+                JSONObject article = rows.getJSONObject(i);
                 
-                // Check article_comment field
+                // Check comment count
                 int commentCount = 0;
-                if (row.has("article_comment")) {
-                    String commentStr = row.optString("article_comment", "0");
+                if (article.has("article_comment")) {
+                    String commentStr = article.optString("article_comment", "0");
                     try {
                         commentCount = Integer.parseInt(commentStr);
                     } catch (NumberFormatException e) {
-                        // Keep if can't parse
-                        commentCount = Config.COMMENT_THRESHOLD;
+                        // Ignore
                     }
                 }
                 
-                // Also check article_interaction.article_comment
-                if (row.has("article_interaction")) {
-                    org.json.JSONObject interaction = row.getJSONObject("article_interaction");
-                    if (interaction.has("article_comment")) {
-                        String commentStr = interaction.optString("article_comment", "0");
-                        try {
-                            commentCount = Integer.parseInt(commentStr);
-                        } catch (NumberFormatException e) {
-                            commentCount = Config.COMMENT_THRESHOLD;
-                        }
-                    }
-                }
-                
-                // Filter logic
+                // Filter by comment threshold
                 if (commentCount >= Config.COMMENT_THRESHOLD) {
-                    filteredRows.put(row);
+                    filteredRows.put(article);
                 } else {
-                    String title = row.optString("article_title", "Unknown");
-                    String id = row.optString("article_id", "N/A");
-                    Logger.logDroppedArticle(title, id, "OkHttp");
-                    droppedCount++;
+                    String title = article.optString("article_title", "Unknown");
+                    String id = article.optString("article_id", "N/A");
+                    Logger.logDroppedArticle(title, id, "JSONFilter");
+                    totalDropped++;
                 }
             }
             
-            if (droppedCount > 0) {
-                Logger.info(String.format("Filtered response: %d dropped, %d remaining", 
-                    droppedCount, filteredRows.length()));
+            if (totalDropped > 0) {
+                Logger.info(String.format("Filtered JSON: %d dropped, %d kept", 
+                    totalDropped, filteredRows.length()));
                 
-                // Replace rows with filtered version
+                // Update the rows array
                 data.put("rows", filteredRows);
-                jsonObj.put("data", data);
-                
-                return jsonObj.toString();
+                return root.toString();
             }
             
-            return jsonResponse;
+            return null; // No changes
             
         } catch (Exception e) {
-            Logger.error("Error in filterJsonResponse: " + e.getMessage(), e);
-            return jsonResponse; // Return original on error
-        }
-    }
-    
-    /**
-     * Helper method to get comment count from an article
-     */
-    private int getCommentCount(Object article) {
-        try {
-            java.lang.reflect.Field field = article.getClass().getDeclaredField("article_comment");
-            field.setAccessible(true);
-            Object commentObj = field.get(article);
-            
-            if (commentObj instanceof String) {
-                String commentStr = (String) commentObj;
-                return commentStr.isEmpty() ? 0 : Integer.parseInt(commentStr);
-            } else if (commentObj instanceof Integer) {
-                return (Integer) commentObj;
-            }
-        } catch (Exception e) {
-            // Ignore
-        }
-        return 0;
-    }
-    
-    /**
-     * Helper method to get article title
-     */
-    private String getArticleTitle(Object article) {
-        try {
-            java.lang.reflect.Field field = article.getClass().getDeclaredField("article_title");
-            field.setAccessible(true);
-            Object title = field.get(article);
-            return title != null ? title.toString() : "Unknown";
-        } catch (Exception e) {
-            return "Unknown";
-        }
-    }
-    
-    /**
-     * Helper method to get article ID
-     */
-    private String getArticleId(Object article) {
-        try {
-            java.lang.reflect.Field field = article.getClass().getDeclaredField("article_id");
-            field.setAccessible(true);
-            Object id = field.get(article);
-            return id != null ? id.toString() : "N/A";
-        } catch (Exception e) {
-            return "N/A";
+            Logger.error("Error parsing/filtering JSON", e);
+            return null;
         }
     }
     
     /**
      * Show Toast notification in the target app
-     * This helps users quickly verify the module is working
      */
     private void showToast(final ClassLoader classLoader, final String message) {
         try {
-            // Find the Application context
             Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", classLoader);
             Object currentActivityThread = XposedHelpers.callStaticMethod(activityThreadClass, "currentActivityThread");
             Object context = XposedHelpers.callMethod(currentActivityThread, "getApplication");
             
-            // Show Toast on UI thread
             final Object appContext = context;
             new Thread(new Runnable() {
                 @Override
                 public void run() {
                     try {
-                        // Get Handler for main thread
                         Class<?> looperClass = XposedHelpers.findClass("android.os.Looper", classLoader);
                         Object mainLooper = XposedHelpers.callStaticMethod(looperClass, "getMainLooper");
                         
                         Class<?> handlerClass = XposedHelpers.findClass("android.os.Handler", classLoader);
                         Object handler = XposedHelpers.newInstance(handlerClass, mainLooper);
                         
-                        // Post to main thread
                         XposedHelpers.callMethod(handler, "post", new Runnable() {
                             @Override
                             public void run() {
@@ -288,7 +231,7 @@ public class XposedModule implements IXposedHookLoadPackage {
                                         "makeText",
                                         appContext,
                                         message,
-                                        0 // Toast.LENGTH_SHORT
+                                        0
                                     );
                                     XposedHelpers.callMethod(toast, "show");
                                     Logger.debug("Toast shown: " + message);
