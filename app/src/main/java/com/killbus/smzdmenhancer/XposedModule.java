@@ -47,13 +47,17 @@ public class XposedModule implements IXposedHookLoadPackage {
     
     /**
      * Initialize all hooks with the app's classloader
+     * Based on actual API response handling in current version
      */
     private void initializeHooks(ClassLoader classLoader) {
         try {
-            // Strategy 1: Hook at data model level (most stable)
-            hookFollowItemBeanData(classLoader);
+            // Strategy 1: Hook ViewModel LiveData (intercepts response after parsing)
+            hookFollowSubRulesVM(classLoader);
             
-            // Strategy 2: Hook "load more" functionality
+            // Strategy 2: Hook Repository response handling (backup strategy)
+            hookRepositoryResponse(classLoader);
+            
+            // Strategy 3: Hook "load more" functionality (from Rhino reference)
             hookJuCuMoreResponse(classLoader);
             
             Logger.info("All hooks initialized successfully");
@@ -71,34 +75,124 @@ public class XposedModule implements IXposedHookLoadPackage {
     }
     
     /**
-     * Strategy 1: Hook FollowItemBean$Data.getRows()
-     * This catches data immediately after JSON parsing
+     * Strategy 1: Hook FollowSubRulesVM LiveData setValue
+     * VERIFIED from sources: com.smzdm.client.android.module.guanzhu.subrules.FollowSubRulesVM
+     * This is where the API response data flows through after parsing
      */
-    private void hookFollowItemBeanData(ClassLoader classLoader) {
+    private void hookFollowSubRulesVM(ClassLoader classLoader) {
         try {
-            Class<?> dataClass = XposedHelpers.findClass(
-                "com.smzdm.client.android.bean.FollowItemBean$Data",
+            Class<?> followSubRulesVMClass = XposedHelpers.findClass(
+                "com.smzdm.client.android.module.guanzhu.subrules.FollowSubRulesVM",
                 classLoader
             );
             
+            // Hook the MutableLiveData setValue for feed list updates
+            Class<?> mutableLiveDataClass = XposedHelpers.findClass(
+                "androidx.lifecycle.MutableLiveData",
+                classLoader
+            );
+            
+            // Find all MutableLiveData fields in ViewModel
+            java.lang.reflect.Field[] fields = followSubRulesVMClass.getDeclaredFields();
+            for (java.lang.reflect.Field field : fields) {
+                if (field.getType().equals(mutableLiveDataClass)) {
+                    Logger.debug("Found MutableLiveData field: " + field.getName());
+                }
+            }
+            
+            // Hook setValue method to intercept data updates
             XposedHelpers.findAndHookMethod(
-                dataClass,
-                "getRows",
+                mutableLiveDataClass,
+                "setValue",
+                Object.class,
                 new XC_MethodHook() {
                     @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        List<?> rows = (List<?>) param.getResult();
-                        if (rows != null && !rows.isEmpty()) {
-                            Logger.debug("Hooking getRows() - filtering " + rows.size() + " items");
-                            ArticleFilter.filterArticleList(rows, false);
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Object value = param.args[0];
+                        if (value != null) {
+                            String className = value.getClass().getName();
+                            
+                            // Check if it's ga.a class (feed list update wrapper)
+                            if (className.equals("ga.a")) {
+                                try {
+                                    // Get the rows list from ga.a
+                                    java.lang.reflect.Field rowsField = value.getClass().getDeclaredField("b");
+                                    rowsField.setAccessible(true);
+                                    Object rowsObj = rowsField.get(value);
+                                    
+                                    if (rowsObj instanceof List) {
+                                        List<?> rows = (List<?>) rowsObj;
+                                        if (!rows.isEmpty()) {
+                                            Logger.debug("Intercepting ViewModel LiveData update with " + rows.size() + " items");
+                                            ArticleFilter.filterArticleList(rows, false);
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    Logger.debug("Failed to filter LiveData value: " + e.getMessage());
+                                }
+                            }
                         }
                     }
                 }
             );
             
-            Logger.info("Successfully hooked FollowItemBean$Data.getRows()");
+            Logger.info("Successfully hooked FollowSubRulesVM LiveData");
         } catch (Exception e) {
-            Logger.error("Failed to hook FollowItemBean$Data", e);
+            Logger.error("Failed to hook FollowSubRulesVM (non-critical)", e);
+        }
+    }
+    
+    /**
+     * Strategy 2: Hook Repository response directly
+     * VERIFIED from sources: ea.d class handles API responses
+     * Hook the ResponseResult after JSON parsing
+     */
+    private void hookRepositoryResponse(ClassLoader classLoader) {
+        try {
+            Class<?> responseResultClass = XposedHelpers.findClass(
+                "com.smzdm.client.base.coroutines.http.ResponseResult",
+                classLoader
+            );
+            
+            // Hook setData method to intercept when data is set
+            XposedHelpers.findAndHookMethod(
+                responseResultClass,
+                "setData",
+                Object.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Object data = param.args[0];
+                        if (data != null) {
+                            String className = data.getClass().getName();
+                            
+                            // Check if it's FollowFeedListBean
+                            if (className.contains("FollowFeedListBean")) {
+                                try {
+                                    // Get rows field
+                                    java.lang.reflect.Field rowsField = data.getClass().getDeclaredField("rows");
+                                    rowsField.setAccessible(true);
+                                    Object rowsObj = rowsField.get(data);
+                                    
+                                    if (rowsObj instanceof List) {
+                                        List<?> rows = (List<?>) rowsObj;
+                                        if (!rows.isEmpty()) {
+                                            Logger.debug("Intercepting Repository response with " + rows.size() + " items");
+                                            ArticleFilter.filterArticleList(rows, false);
+                                        }
+                                    }
+                                } catch (Exception e) {
+                                    Logger.debug("Failed to filter Repository response: " + e.getMessage());
+                                }
+                            }
+                        }
+                    }
+                }
+            );
+            
+            Logger.info("Successfully hooked Repository ResponseResult");
+        } catch (Exception e) {
+            Logger.error("Failed to hook Repository (non-critical)", e);
         }
     }
     
