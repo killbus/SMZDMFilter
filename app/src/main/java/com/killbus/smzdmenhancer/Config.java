@@ -35,7 +35,7 @@ public class Config {
     /**
      * Enable debug mode for detailed logging
      */
-    public static boolean DEBUG_MODE = false;
+    public static boolean DEBUG_MODE = true;
     
     /**
      * Enable logging of filtered articles
@@ -57,7 +57,7 @@ public class Config {
      * Show Toast notification when filtering articles
      * Useful for seeing the filter in action
      */
-    public static boolean SHOW_FILTER_TOAST = false;
+    public static boolean SHOW_FILTER_TOAST = true;
     
     // ========== Channel Filtering Configuration ==========
     
