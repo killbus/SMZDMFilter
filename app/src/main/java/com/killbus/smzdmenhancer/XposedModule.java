@@ -82,15 +82,19 @@ public class XposedModule implements IXposedHookLoadPackage {
                 "com.smzdm.client.android.module.guanzhu.subrules.FollowSubRulesVM",
                 classLoader
             );
-            
+            Logger.info("Found FollowSubRulesVM class: " + followSubRulesVMClass.getName());
+
             // Find the inner class that implements bm.e
             // Pattern: FollowSubRulesVM$a$a$a implements bm.e<String>
             Class<?>[] declaredClasses = followSubRulesVMClass.getDeclaredClasses();
+            Logger.info("Found " + declaredClasses.length + " inner classes in FollowSubRulesVM");
             for (Class<?> innerClass : declaredClasses) {
+                Logger.info("Checking inner class: " + innerClass.getName());
                 // Check if this class implements bm.e
                 Class<?>[] interfaces = innerClass.getInterfaces();
                 boolean implementsCallback = false;
                 for (Class<?> iface : interfaces) {
+                    Logger.info("  - Implements interface: " + iface.getName());
                     if (iface.getName().equals("bm.e")) {
                         implementsCallback = true;
                         break;
