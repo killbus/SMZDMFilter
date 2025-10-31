@@ -1,4 +1,4 @@
-package com.example.xposedtest;
+package com.killbus.smzdmenhancer;
 
 import android.os.Bundle;
 

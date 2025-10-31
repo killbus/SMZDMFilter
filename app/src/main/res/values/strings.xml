@@ -1,3 +1,4 @@
 <resources>
-    <string name="app_name">xposedtest</string>
+    <string name="app_name">SMZDM Enhancer</string>
+    <string name="xposed_description">Xposed module to enhance SMZDM app experience</string>
 </resources>
