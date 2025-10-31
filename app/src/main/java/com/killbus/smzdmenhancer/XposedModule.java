@@ -95,30 +95,30 @@ public class XposedModule implements IXposedHookLoadPackage {
     }
     
     /**
-     * Strategy 2: Hook JuCuMoreResponse for "load more" functionality
-     * Based on Rhino script: com.smzdm.client.android.module.guanzhu.l0$k0$a.a
+     * Strategy 2: Hook CommonMessageDetailBean for "load more" functionality
+     * VERIFIED from decompiled sources: com.smzdm.client.android.bean.CommonMessageDetailBean
+     * Used by: CommonMessageDetailFragment for "list_more_jucu_info" endpoint
      */
     private void hookJuCuMoreResponse(ClassLoader classLoader) {
         try {
-            // Find the "load more" handler class
-            // This is more fragile due to obfuscation, but necessary for complete filtering
-            Class<?> juCuMoreResponseDataClass = XposedHelpers.findClass(
-                "com.smzdm.client.android.module.guanzhu.bean.JuCuMoreResponse$Data",
+            // Hook the VERIFIED class from decompiled sources
+            Class<?> commonMessageDetailDataClass = XposedHelpers.findClass(
+                "com.smzdm.client.android.bean.CommonMessageDetailBean$Data",
                 classLoader
             );
             
-            // Hook the getter for article_list in JuCuMoreResponse$Data
+            // Hook getRows() which returns List<Article>
             XposedHelpers.findAndHookMethod(
-                juCuMoreResponseDataClass,
-                "getArticle_list",
+                commonMessageDetailDataClass,
+                "getRows",
                 new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                         List<?> articleList = (List<?>) param.getResult();
                         if (articleList != null && !articleList.isEmpty()) {
-                            Logger.debug("Hooking JuCuMoreResponse.getArticle_list() - filtering " + articleList.size() + " items");
+                            Logger.debug("Hooking CommonMessageDetailBean$Data.getRows() - filtering " + articleList.size() + " items");
                             
-                            // Filter the nested articles
+                            // Filter the articles
                             int totalDropped = 0;
                             java.util.Iterator<?> iterator = articleList.iterator();
                             while (iterator.hasNext()) {
@@ -126,6 +126,9 @@ public class XposedModule implements IXposedHookLoadPackage {
                                 try {
                                     int commentCount = getCommentCount(article);
                                     if (commentCount < FilterConfig.COMMENT_THRESHOLD) {
+                                        String title = getArticleTitle(article);
+                                        String id = getArticleId(article);
+                                        Logger.logDroppedArticle(title, id, "CommonMessageDetail");
                                         iterator.remove();
                                         totalDropped++;
                                     }
@@ -135,7 +138,7 @@ public class XposedModule implements IXposedHookLoadPackage {
                             }
                             
                             if (totalDropped > 0) {
-                                Logger.info(String.format("JuCuMoreResponse filtered: %d dropped, %d remaining", 
+                                Logger.info(String.format("CommonMessageDetailBean filtered: %d dropped, %d remaining", 
                                     totalDropped, articleList.size()));
                             }
                         }
@@ -143,9 +146,9 @@ public class XposedModule implements IXposedHookLoadPackage {
                 }
             );
             
-            Logger.info("Successfully hooked JuCuMoreResponse$Data");
+            Logger.info("Successfully hooked CommonMessageDetailBean$Data");
         } catch (Exception e) {
-            Logger.error("Failed to hook JuCuMoreResponse (non-critical)", e);
+            Logger.error("Failed to hook CommonMessageDetailBean (non-critical)", e);
         }
     }
     
@@ -168,5 +171,33 @@ public class XposedModule implements IXposedHookLoadPackage {
             // Ignore
         }
         return 0;
+    }
+    
+    /**
+     * Helper method to get article title
+     */
+    private String getArticleTitle(Object article) {
+        try {
+            java.lang.reflect.Field field = article.getClass().getDeclaredField("article_title");
+            field.setAccessible(true);
+            Object title = field.get(article);
+            return title != null ? title.toString() : "Unknown";
+        } catch (Exception e) {
+            return "Unknown";
+        }
+    }
+    
+    /**
+     * Helper method to get article ID
+     */
+    private String getArticleId(Object article) {
+        try {
+            java.lang.reflect.Field field = article.getClass().getDeclaredField("article_id");
+            field.setAccessible(true);
+            Object id = field.get(article);
+            return id != null ? id.toString() : "N/A";
+        } catch (Exception e) {
+            return "N/A";
+        }
     }
 }
