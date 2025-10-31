@@ -47,18 +47,12 @@ public class XposedModule implements IXposedHookLoadPackage {
     
     /**
      * Initialize all hooks with the app's classloader
-     * Based on actual API response handling in current version
+     * Using OkHttp Response interception - the simplest and most reliable approach
      */
     private void initializeHooks(ClassLoader classLoader) {
         try {
-            // Strategy 1: Hook ViewModel LiveData (intercepts response after parsing)
-            hookFollowSubRulesVM(classLoader);
-            
-            // Strategy 2: Hook Repository response handling (backup strategy)
-            hookRepositoryResponse(classLoader);
-            
-            // Strategy 3: Hook "load more" functionality (from Rhino reference)
-            hookJuCuMoreResponse(classLoader);
+            // Primary Strategy: Hook OkHttp Response body (intercepts raw JSON)
+            hookOkHttpResponse(classLoader);
             
             Logger.info("All hooks initialized successfully");
             
@@ -75,189 +69,138 @@ public class XposedModule implements IXposedHookLoadPackage {
     }
     
     /**
-     * Strategy 1: Hook FollowSubRulesVM requestFeedList method directly
-     * VERIFIED from sources: com.smzdm.client.android.module.guanzhu.subrules.FollowSubRulesVM
-     * This method is called when requesting feed data
+     * Hook OkHttp ResponseBody to intercept and modify raw JSON response
+     * This is the simplest and most reliable approach:
+     * - Works at network layer before any parsing
+     * - No need to track obfuscated class names
+     * - Directly modifies the JSON string
      */
-    private void hookFollowSubRulesVM(ClassLoader classLoader) {
+    private void hookOkHttpResponse(ClassLoader classLoader) {
         try {
-            // First, let's add comprehensive logging to see what's happening
-            Class<?> mutableLiveDataClass = XposedHelpers.findClass(
-                "androidx.lifecycle.MutableLiveData",
-                classLoader
-            );
+            // Hook okhttp3.ResponseBody.string() method
+            Class<?> responseBodyClass = XposedHelpers.findClass("okhttp3.ResponseBody", classLoader);
             
-            // Hook ALL setValue calls with detailed logging
             XposedHelpers.findAndHookMethod(
-                mutableLiveDataClass,
-                "setValue",
-                Object.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        Object value = param.args[0];
-                        if (value != null) {
-                            String className = value.getClass().getName();
-                            Logger.debug("LiveData.setValue called with: " + className);
-                            
-                            // Log all class names to identify the correct one
-                            if (className.contains("ga") || className.contains("Feed") || className.contains("follow")) {
-                                Logger.info("*** Potential feed data class: " + className);
-                                
-                                // Try to inspect the object
-                                try {
-                                    java.lang.reflect.Field[] fields = value.getClass().getDeclaredFields();
-                                    Logger.debug("  Fields count: " + fields.length);
-                                    for (java.lang.reflect.Field field : fields) {
-                                        field.setAccessible(true);
-                                        Object fieldValue = field.get(value);
-                                        if (fieldValue instanceof List) {
-                                            List<?> list = (List<?>) fieldValue;
-                                            Logger.info("  *** Found List field '" + field.getName() + "' with " + list.size() + " items");
-                                            
-                                            if (!list.isEmpty()) {
-                                                Object firstItem = list.get(0);
-                                                Logger.info("  *** List item type: " + firstItem.getClass().getName());
-                                                
-                                                // Try to filter
-                                                ArticleFilter.filterArticleList(list, false);
-                                            }
-                                        }
-                                    }
-                                } catch (Exception e) {
-                                    Logger.debug("  Error inspecting: " + e.getMessage());
-                                }
-                            }
-                        }
-                    }
-                }
-            );
-            
-            Logger.info("Successfully hooked MutableLiveData.setValue with enhanced logging");
-        } catch (Exception e) {
-            Logger.error("Failed to hook LiveData", e);
-        }
-    }
-    
-    /**
-     * Strategy 2: Hook ResponseResult.setData with comprehensive logging
-     * VERIFIED from sources: ea.d class handles API responses
-     */
-    private void hookRepositoryResponse(ClassLoader classLoader) {
-        try {
-            Class<?> responseResultClass = XposedHelpers.findClass(
-                "com.smzdm.client.base.coroutines.http.ResponseResult",
-                classLoader
-            );
-            
-            // Hook setData with detailed logging
-            XposedHelpers.findAndHookMethod(
-                responseResultClass,
-                "setData",
-                Object.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        Object data = param.args[0];
-                        if (data != null) {
-                            String className = data.getClass().getName();
-                            Logger.debug("ResponseResult.setData called with: " + className);
-                            
-                            // Log all relevant classes
-                            if (className.contains("Follow") || className.contains("Feed") || className.contains("Bean")) {
-                                Logger.info("*** Potential response bean: " + className);
-                                
-                                // Try to find rows field
-                                try {
-                                    java.lang.reflect.Field[] fields = data.getClass().getDeclaredFields();
-                                    for (java.lang.reflect.Field field : fields) {
-                                        field.setAccessible(true);
-                                        if (field.getName().equals("rows") || field.getType().equals(List.class)) {
-                                            Object fieldValue = field.get(data);
-                                            if (fieldValue instanceof List) {
-                                                List<?> list = (List<?>) fieldValue;
-                                                Logger.info("  *** Found 'rows' field with " + list.size() + " items");
-                                                
-                                                if (!list.isEmpty()) {
-                                                    Object firstItem = list.get(0);
-                                                    Logger.info("  *** Row item type: " + firstItem.getClass().getName());
-                                                    
-                                                    // Try to filter
-                                                    ArticleFilter.filterArticleList(list, false);
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch (Exception e) {
-                                    Logger.debug("  Error processing: " + e.getMessage());
-                                }
-                            }
-                        }
-                    }
-                }
-            );
-            
-            Logger.info("Successfully hooked ResponseResult.setData with enhanced logging");
-        } catch (Exception e) {
-            Logger.error("Failed to hook ResponseResult", e);
-        }
-    }
-    
-    /**
-     * Strategy 2: Hook CommonMessageDetailBean for "load more" functionality
-     * VERIFIED from decompiled sources: com.smzdm.client.android.bean.CommonMessageDetailBean
-     * Used by: CommonMessageDetailFragment for "list_more_jucu_info" endpoint
-     */
-    private void hookJuCuMoreResponse(ClassLoader classLoader) {
-        try {
-            // Hook the VERIFIED class from decompiled sources
-            Class<?> commonMessageDetailDataClass = XposedHelpers.findClass(
-                "com.smzdm.client.android.bean.CommonMessageDetailBean$Data",
-                classLoader
-            );
-            
-            // Hook getRows() which returns List<Article>
-            XposedHelpers.findAndHookMethod(
-                commonMessageDetailDataClass,
-                "getRows",
+                responseBodyClass,
+                "string",
                 new XC_MethodHook() {
                     @Override
                     protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        List<?> articleList = (List<?>) param.getResult();
-                        if (articleList != null && !articleList.isEmpty()) {
-                            Logger.debug("Hooking CommonMessageDetailBean$Data.getRows() - filtering " + articleList.size() + " items");
-                            
-                            // Filter the articles
-                            int totalDropped = 0;
-                            java.util.Iterator<?> iterator = articleList.iterator();
-                            while (iterator.hasNext()) {
-                                Object article = iterator.next();
+                        String originalResponse = (String) param.getResult();
+                        
+                        // Only process responses from our target API
+                        if (originalResponse != null && originalResponse.contains("\"rows\"")) {
+                            // Check if it's a follow feed response
+                            if (originalResponse.contains("\"article_id\"") || 
+                                originalResponse.contains("\"article_title\"")) {
+                                
+                                Logger.info("Intercepting API response, processing JSON...");
+                                
                                 try {
-                                    int commentCount = getCommentCount(article);
-                                    if (commentCount < Config.COMMENT_THRESHOLD) {
-                                        String title = getArticleTitle(article);
-                                        String id = getArticleId(article);
-                                        Logger.logDroppedArticle(title, id, "CommonMessageDetail");
-                                        iterator.remove();
-                                        totalDropped++;
-                                    }
+                                    // Parse and filter the JSON
+                                    String modifiedResponse = filterJsonResponse(originalResponse);
+                                    
+                                    // Replace the response
+                                    param.setResult(modifiedResponse);
+                                    
+                                    Logger.info("JSON response filtered successfully");
                                 } catch (Exception e) {
-                                    Logger.debug("Error filtering article: " + e.getMessage());
+                                    Logger.error("Failed to filter JSON response: " + e.getMessage(), e);
+                                    // Keep original response on error
                                 }
-                            }
-                            
-                            if (totalDropped > 0) {
-                                Logger.info(String.format("CommonMessageDetailBean filtered: %d dropped, %d remaining", 
-                                    totalDropped, articleList.size()));
                             }
                         }
                     }
                 }
             );
             
-            Logger.info("Successfully hooked CommonMessageDetailBean$Data");
+            Logger.info("Successfully hooked OkHttp ResponseBody.string()");
         } catch (Exception e) {
-            Logger.error("Failed to hook CommonMessageDetailBean (non-critical)", e);
+            Logger.error("Failed to hook OkHttp ResponseBody", e);
+        }
+    }
+    
+    /**
+     * Filter JSON response by removing articles that don't meet criteria
+     * Uses simple string manipulation to avoid heavy JSON parsing
+     */
+    private String filterJsonResponse(String jsonResponse) {
+        try {
+            // Use org.json which is available in Android
+            org.json.JSONObject jsonObj = new org.json.JSONObject(jsonResponse);
+            
+            // Check if it has data.rows structure
+            if (!jsonObj.has("data")) {
+                return jsonResponse;
+            }
+            
+            org.json.JSONObject data = jsonObj.getJSONObject("data");
+            if (!data.has("rows")) {
+                return jsonResponse;
+            }
+            
+            org.json.JSONArray rows = data.getJSONArray("rows");
+            Logger.debug("Found " + rows.length() + " rows in response");
+            
+            // Filter rows
+            org.json.JSONArray filteredRows = new org.json.JSONArray();
+            int droppedCount = 0;
+            
+            for (int i = 0; i < rows.length(); i++) {
+                org.json.JSONObject row = rows.getJSONObject(i);
+                
+                // Check article_comment field
+                int commentCount = 0;
+                if (row.has("article_comment")) {
+                    String commentStr = row.optString("article_comment", "0");
+                    try {
+                        commentCount = Integer.parseInt(commentStr);
+                    } catch (NumberFormatException e) {
+                        // Keep if can't parse
+                        commentCount = Config.COMMENT_THRESHOLD;
+                    }
+                }
+                
+                // Also check article_interaction.article_comment
+                if (row.has("article_interaction")) {
+                    org.json.JSONObject interaction = row.getJSONObject("article_interaction");
+                    if (interaction.has("article_comment")) {
+                        String commentStr = interaction.optString("article_comment", "0");
+                        try {
+                            commentCount = Integer.parseInt(commentStr);
+                        } catch (NumberFormatException e) {
+                            commentCount = Config.COMMENT_THRESHOLD;
+                        }
+                    }
+                }
+                
+                // Filter logic
+                if (commentCount >= Config.COMMENT_THRESHOLD) {
+                    filteredRows.put(row);
+                } else {
+                    String title = row.optString("article_title", "Unknown");
+                    String id = row.optString("article_id", "N/A");
+                    Logger.logDroppedArticle(title, id, "OkHttp");
+                    droppedCount++;
+                }
+            }
+            
+            if (droppedCount > 0) {
+                Logger.info(String.format("Filtered response: %d dropped, %d remaining", 
+                    droppedCount, filteredRows.length()));
+                
+                // Replace rows with filtered version
+                data.put("rows", filteredRows);
+                jsonObj.put("data", data);
+                
+                return jsonObj.toString();
+            }
+            
+            return jsonResponse;
+            
+        } catch (Exception e) {
+            Logger.error("Error in filterJsonResponse: " + e.getMessage(), e);
+            return jsonResponse; // Return original on error
         }
     }
     
