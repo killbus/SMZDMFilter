@@ -46,13 +46,51 @@ public class ArticleFilter {
                     }
                 } else {
                     // Filter top-level item
-                    int commentCount = getCommentCount(item);
-                    if (commentCount < Config.COMMENT_THRESHOLD) {
+                    boolean shouldFilter = false;
+                    String filterReason = "";
+                    
+                    // Check channel filter first
+                    int channelId = getChannelId(item);
+                    if (Config.shouldFilterByChannel(channelId)) {
+                        shouldFilter = true;
+                        filterReason = "channel:" + channelId;
+                    }
+                    
+                    // Check comment count if not already filtered
+                    if (!shouldFilter) {
+                        int commentCount = getCommentCount(item);
+                        if (commentCount < Config.COMMENT_THRESHOLD) {
+                            shouldFilter = true;
+                            filterReason = "comments:" + commentCount;
+                        }
+                    }
+                    
+                    // Check worthy count if not already filtered
+                    if (!shouldFilter && Config.MIN_WORTHY_COUNT > 0) {
+                        int worthyCount = getWorthyCount(item);
+                        if (worthyCount < Config.MIN_WORTHY_COUNT) {
+                            shouldFilter = true;
+                            filterReason = "worthy:" + worthyCount;
+                        }
+                    }
+                    
+                    // Check worthy percentage if not already filtered
+                    if (!shouldFilter && Config.MIN_WORTHY_PERCENTAGE > 0) {
+                        int worthyCount = getWorthyCount(item);
+                        int unworthyCount = getUnworthyCount(item);
+                        int percentage = calculateWorthyPercentage(worthyCount, unworthyCount);
+                        if (percentage < Config.MIN_WORTHY_PERCENTAGE) {
+                            shouldFilter = true;
+                            filterReason = "worthy%:" + percentage;
+                        }
+                    }
+                    
+                    if (shouldFilter) {
                         String title = getArticleTitle(item);
                         String id = getArticleId(item);
                         String typeName = getArticleTypeName(item);
                         
-                        Logger.logDroppedArticle(title, id, typeName);
+                        Logger.logDroppedArticle(title, id, typeName + "[" + filterReason + "]");
                         iterator.remove();
                         totalDropped++;
                     }
@@ -91,13 +129,51 @@ public class ArticleFilter {
             Object article = iterator.next();
             
             try {
-                int commentCount = getCommentCount(article);
-                if (commentCount < Config.COMMENT_THRESHOLD) {
+                boolean shouldFilter = false;
+                String filterReason = "";
+                
+                // Check channel filter first
+                int channelId = getChannelId(article);
+                if (Config.shouldFilterByChannel(channelId)) {
+                    shouldFilter = true;
+                    filterReason = "channel:" + channelId;
+                }
+                
+                // Check comment count if not already filtered
+                if (!shouldFilter) {
+                    int commentCount = getCommentCount(article);
+                    if (commentCount < Config.COMMENT_THRESHOLD) {
+                        shouldFilter = true;
+                        filterReason = "comments:" + commentCount;
+                    }
+                }
+                
+                // Check worthy count if not already filtered
+                if (!shouldFilter && Config.MIN_WORTHY_COUNT > 0) {
+                    int worthyCount = getWorthyCount(article);
+                    if (worthyCount < Config.MIN_WORTHY_COUNT) {
+                        shouldFilter = true;
+                        filterReason = "worthy:" + worthyCount;
+                    }
+                }
+                
+                // Check worthy percentage if not already filtered
+                if (!shouldFilter && Config.MIN_WORTHY_PERCENTAGE > 0) {
+                    int worthyCount = getWorthyCount(article);
+                    int unworthyCount = getUnworthyCount(article);
+                    int percentage = calculateWorthyPercentage(worthyCount, unworthyCount);
+                    if (percentage < Config.MIN_WORTHY_PERCENTAGE) {
+                        shouldFilter = true;
+                        filterReason = "worthy%:" + percentage;
+                    }
+                }
+                
+                if (shouldFilter) {
                     String title = getArticleTitle(article);
                     String id = getArticleId(article);
                     String typeName = getArticleTypeName(parent);
                     
-                    Logger.logDroppedArticle(title, id, typeName);
+                    Logger.logDroppedArticle(title, id, typeName + "[" + filterReason + "]");
                     iterator.remove();
                     dropped++;
                 }
@@ -194,6 +270,77 @@ public class ArticleFilter {
         } catch (Exception e) {
             return "Unknown";
         }
+    }
+    
+    /**
+     * Get article channel ID
+     */
+    private static int getChannelId(Object article) {
+        try {
+            Object channelId = getField(article, "article_channel_id");
+            if (channelId instanceof Integer) {
+                return (Integer) channelId;
+            } else if (channelId instanceof String) {
+                return Integer.parseInt((String) channelId);
+            }
+        } catch (Exception e) {
+            Logger.debug("Could not get channel ID: " + e.getMessage());
+        }
+        return 0;
+    }
+    
+    /**
+     * Get worthy count from article
+     */
+    private static int getWorthyCount(Object article) {
+        try {
+            Object worthy = getField(article, "article_worthy");
+            if (worthy instanceof Integer) {
+                return (Integer) worthy;
+            } else if (worthy instanceof String) {
+                String worthyStr = (String) worthy;
+                if (worthyStr != null && !worthyStr.isEmpty()) {
+                    return Integer.parseInt(worthyStr);
+                }
+            }
+        } catch (Exception e) {
+            Logger.debug("Could not get worthy count: " + e.getMessage());
+        }
+        return 0;
+    }
+    
+    /**
+     * Get unworthy count from article
+     */
+    private static int getUnworthyCount(Object article) {
+        try {
+            Object unworthy = getField(article, "article_unworthy");
+            if (unworthy instanceof Integer) {
+                return (Integer) unworthy;
+            } else if (unworthy instanceof String) {
+                String unworthyStr = (String) unworthy;
+                if (unworthyStr != null && !unworthyStr.isEmpty()) {
+                    return Integer.parseInt(unworthyStr);
+                }
+            }
+        } catch (Exception e) {
+            Logger.debug("Could not get unworthy count: " + e.getMessage());
+        }
+        return 0;
+    }
+    
+    /**
+     * Calculate worthy percentage
+     * @param worthy Worthy count
+     * @param unworthy Unworthy count
+     * @return Percentage (0-100), or 100 if total is 0
+     */
+    private static int calculateWorthyPercentage(int worthy, int unworthy) {
+        int total = worthy + unworthy;
+        if (total == 0) {
+            return 100; // If no votes, consider it 100% to not filter
+        }
+        return (int) ((worthy * 100.0) / total);
     }
     
     /**
