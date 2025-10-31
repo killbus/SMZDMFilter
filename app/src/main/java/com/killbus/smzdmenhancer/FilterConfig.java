@@ -13,7 +13,7 @@ public class FilterConfig {
     /**
      * Enable debug mode for detailed logging
      */
-    public static boolean DEBUG_MODE = false;
+    public static boolean DEBUG_MODE = true;
     
     /**
      * Enable logging of filtered articles
