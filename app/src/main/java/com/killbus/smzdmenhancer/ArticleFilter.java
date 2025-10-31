@@ -47,7 +47,7 @@ public class ArticleFilter {
                 } else {
                     // Filter top-level item
                     int commentCount = getCommentCount(item);
-                    if (commentCount < FilterConfig.COMMENT_THRESHOLD) {
+                    if (commentCount < Config.COMMENT_THRESHOLD) {
                         String title = getArticleTitle(item);
                         String id = getArticleId(item);
                         String typeName = getArticleTypeName(item);
@@ -92,7 +92,7 @@ public class ArticleFilter {
             
             try {
                 int commentCount = getCommentCount(article);
-                if (commentCount < FilterConfig.COMMENT_THRESHOLD) {
+                if (commentCount < Config.COMMENT_THRESHOLD) {
                     String title = getArticleTitle(article);
                     String id = getArticleId(article);
                     String typeName = getArticleTypeName(parent);

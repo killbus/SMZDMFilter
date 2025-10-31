@@ -1,6 +1,6 @@
 package com.killbus.smzdmenhancer.utils;
 
-import com.killbus.smzdmenhancer.FilterConfig;
+import com.killbus.smzdmenhancer.Config;
 import de.robv.android.xposed.XposedBridge;
 
 /**
@@ -13,7 +13,7 @@ public class Logger {
      * Log info message
      */
     public static void info(String message) {
-        if (FilterConfig.ENABLE_LOGGING) {
+        if (Config.ENABLE_LOGGING) {
             XposedBridge.log(TAG + ": " + message);
         }
     }
@@ -22,7 +22,7 @@ public class Logger {
      * Log debug message (only in debug mode)
      */
     public static void debug(String message) {
-        if (FilterConfig.DEBUG_MODE) {
+        if (Config.DEBUG_MODE) {
             XposedBridge.log(TAG + " [DEBUG]: " + message);
         }
     }
@@ -41,7 +41,7 @@ public class Logger {
      * Log filtering result
      */
     public static void logFilterResult(int totalDropped, int remaining) {
-        if (FilterConfig.ENABLE_LOGGING && totalDropped > 0) {
+        if (Config.ENABLE_LOGGING && totalDropped > 0) {
             info(String.format("Result was filtered. %d dropped. Keep %d", totalDropped, remaining));
         }
     }
@@ -50,7 +50,7 @@ public class Logger {
      * Log dropped article
      */
     public static void logDroppedArticle(String title, String id, String type) {
-        if (FilterConfig.DEBUG_MODE) {
+        if (Config.DEBUG_MODE) {
             debug(String.format("Drop \"%s (%s)\" from \"%s\"", title, id, type));
         }
     }

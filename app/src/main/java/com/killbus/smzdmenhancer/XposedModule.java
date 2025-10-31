@@ -57,8 +57,16 @@ public class XposedModule implements IXposedHookLoadPackage {
             hookJuCuMoreResponse(classLoader);
             
             Logger.info("All hooks initialized successfully");
+            
+            // Show Toast notification if enabled
+            if (Config.SHOW_HOOK_SUCCESS_TOAST) {
+                showToast(classLoader, "✅ SMZDM Enhancer Activated");
+            }
         } catch (Exception e) {
             Logger.error("Error initializing hooks", e);
+            if (Config.SHOW_HOOK_SUCCESS_TOAST) {
+                showToast(classLoader, "❌ SMZDM Enhancer Failed");
+            }
         }
     }
     
@@ -125,7 +133,7 @@ public class XposedModule implements IXposedHookLoadPackage {
                                 Object article = iterator.next();
                                 try {
                                     int commentCount = getCommentCount(article);
-                                    if (commentCount < FilterConfig.COMMENT_THRESHOLD) {
+                                    if (commentCount < Config.COMMENT_THRESHOLD) {
                                         String title = getArticleTitle(article);
                                         String id = getArticleId(article);
                                         Logger.logDroppedArticle(title, id, "CommonMessageDetail");
@@ -198,6 +206,60 @@ public class XposedModule implements IXposedHookLoadPackage {
             return id != null ? id.toString() : "N/A";
         } catch (Exception e) {
             return "N/A";
+        }
+    }
+    
+    /**
+     * Show Toast notification in the target app
+     * This helps users quickly verify the module is working
+     */
+    private void showToast(final ClassLoader classLoader, final String message) {
+        try {
+            // Find the Application context
+            Class<?> activityThreadClass = XposedHelpers.findClass("android.app.ActivityThread", classLoader);
+            Object currentActivityThread = XposedHelpers.callStaticMethod(activityThreadClass, "currentActivityThread");
+            Object context = XposedHelpers.callMethod(currentActivityThread, "getApplication");
+            
+            // Show Toast on UI thread
+            final Object appContext = context;
+            new Thread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        // Get Handler for main thread
+                        Class<?> looperClass = XposedHelpers.findClass("android.os.Looper", classLoader);
+                        Object mainLooper = XposedHelpers.callStaticMethod(looperClass, "getMainLooper");
+                        
+                        Class<?> handlerClass = XposedHelpers.findClass("android.os.Handler", classLoader);
+                        Object handler = XposedHelpers.newInstance(handlerClass, mainLooper);
+                        
+                        // Post to main thread
+                        XposedHelpers.callMethod(handler, "post", new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    Class<?> toastClass = XposedHelpers.findClass("android.widget.Toast", classLoader);
+                                    Object toast = XposedHelpers.callStaticMethod(
+                                        toastClass,
+                                        "makeText",
+                                        appContext,
+                                        message,
+                                        0 // Toast.LENGTH_SHORT
+                                    );
+                                    XposedHelpers.callMethod(toast, "show");
+                                    Logger.debug("Toast shown: " + message);
+                                } catch (Exception e) {
+                                    Logger.error("Failed to show Toast", e);
+                                }
+                            }
+                        });
+                    } catch (Exception e) {
+                        Logger.error("Failed to post Toast to main thread", e);
+                    }
+                }
+            }).start();
+        } catch (Exception e) {
+            Logger.error("Failed to show Toast", e);
         }
     }
 }
