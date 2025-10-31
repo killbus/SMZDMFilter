@@ -75,32 +75,19 @@ public class XposedModule implements IXposedHookLoadPackage {
     }
     
     /**
-     * Strategy 1: Hook FollowSubRulesVM LiveData setValue
+     * Strategy 1: Hook FollowSubRulesVM requestFeedList method directly
      * VERIFIED from sources: com.smzdm.client.android.module.guanzhu.subrules.FollowSubRulesVM
-     * This is where the API response data flows through after parsing
+     * This method is called when requesting feed data
      */
     private void hookFollowSubRulesVM(ClassLoader classLoader) {
         try {
-            Class<?> followSubRulesVMClass = XposedHelpers.findClass(
-                "com.smzdm.client.android.module.guanzhu.subrules.FollowSubRulesVM",
-                classLoader
-            );
-            
-            // Hook the MutableLiveData setValue for feed list updates
+            // First, let's add comprehensive logging to see what's happening
             Class<?> mutableLiveDataClass = XposedHelpers.findClass(
                 "androidx.lifecycle.MutableLiveData",
                 classLoader
             );
             
-            // Find all MutableLiveData fields in ViewModel
-            java.lang.reflect.Field[] fields = followSubRulesVMClass.getDeclaredFields();
-            for (java.lang.reflect.Field field : fields) {
-                if (field.getType().equals(mutableLiveDataClass)) {
-                    Logger.debug("Found MutableLiveData field: " + field.getName());
-                }
-            }
-            
-            // Hook setValue method to intercept data updates
+            // Hook ALL setValue calls with detailed logging
             XposedHelpers.findAndHookMethod(
                 mutableLiveDataClass,
                 "setValue",
@@ -111,24 +98,34 @@ public class XposedModule implements IXposedHookLoadPackage {
                         Object value = param.args[0];
                         if (value != null) {
                             String className = value.getClass().getName();
+                            Logger.debug("LiveData.setValue called with: " + className);
                             
-                            // Check if it's ga.a class (feed list update wrapper)
-                            if (className.equals("ga.a")) {
+                            // Log all class names to identify the correct one
+                            if (className.contains("ga") || className.contains("Feed") || className.contains("follow")) {
+                                Logger.info("*** Potential feed data class: " + className);
+                                
+                                // Try to inspect the object
                                 try {
-                                    // Get the rows list from ga.a
-                                    java.lang.reflect.Field rowsField = value.getClass().getDeclaredField("b");
-                                    rowsField.setAccessible(true);
-                                    Object rowsObj = rowsField.get(value);
-                                    
-                                    if (rowsObj instanceof List) {
-                                        List<?> rows = (List<?>) rowsObj;
-                                        if (!rows.isEmpty()) {
-                                            Logger.debug("Intercepting ViewModel LiveData update with " + rows.size() + " items");
-                                            ArticleFilter.filterArticleList(rows, false);
+                                    java.lang.reflect.Field[] fields = value.getClass().getDeclaredFields();
+                                    Logger.debug("  Fields count: " + fields.length);
+                                    for (java.lang.reflect.Field field : fields) {
+                                        field.setAccessible(true);
+                                        Object fieldValue = field.get(value);
+                                        if (fieldValue instanceof List) {
+                                            List<?> list = (List<?>) fieldValue;
+                                            Logger.info("  *** Found List field '" + field.getName() + "' with " + list.size() + " items");
+                                            
+                                            if (!list.isEmpty()) {
+                                                Object firstItem = list.get(0);
+                                                Logger.info("  *** List item type: " + firstItem.getClass().getName());
+                                                
+                                                // Try to filter
+                                                ArticleFilter.filterArticleList(list, false);
+                                            }
                                         }
                                     }
                                 } catch (Exception e) {
-                                    Logger.debug("Failed to filter LiveData value: " + e.getMessage());
+                                    Logger.debug("  Error inspecting: " + e.getMessage());
                                 }
                             }
                         }
@@ -136,16 +133,15 @@ public class XposedModule implements IXposedHookLoadPackage {
                 }
             );
             
-            Logger.info("Successfully hooked FollowSubRulesVM LiveData");
+            Logger.info("Successfully hooked MutableLiveData.setValue with enhanced logging");
         } catch (Exception e) {
-            Logger.error("Failed to hook FollowSubRulesVM (non-critical)", e);
+            Logger.error("Failed to hook LiveData", e);
         }
     }
     
     /**
-     * Strategy 2: Hook Repository response directly
+     * Strategy 2: Hook ResponseResult.setData with comprehensive logging
      * VERIFIED from sources: ea.d class handles API responses
-     * Hook the ResponseResult after JSON parsing
      */
     private void hookRepositoryResponse(ClassLoader classLoader) {
         try {
@@ -154,7 +150,7 @@ public class XposedModule implements IXposedHookLoadPackage {
                 classLoader
             );
             
-            // Hook setData method to intercept when data is set
+            // Hook setData with detailed logging
             XposedHelpers.findAndHookMethod(
                 responseResultClass,
                 "setData",
@@ -165,24 +161,35 @@ public class XposedModule implements IXposedHookLoadPackage {
                         Object data = param.args[0];
                         if (data != null) {
                             String className = data.getClass().getName();
+                            Logger.debug("ResponseResult.setData called with: " + className);
                             
-                            // Check if it's FollowFeedListBean
-                            if (className.contains("FollowFeedListBean")) {
+                            // Log all relevant classes
+                            if (className.contains("Follow") || className.contains("Feed") || className.contains("Bean")) {
+                                Logger.info("*** Potential response bean: " + className);
+                                
+                                // Try to find rows field
                                 try {
-                                    // Get rows field
-                                    java.lang.reflect.Field rowsField = data.getClass().getDeclaredField("rows");
-                                    rowsField.setAccessible(true);
-                                    Object rowsObj = rowsField.get(data);
-                                    
-                                    if (rowsObj instanceof List) {
-                                        List<?> rows = (List<?>) rowsObj;
-                                        if (!rows.isEmpty()) {
-                                            Logger.debug("Intercepting Repository response with " + rows.size() + " items");
-                                            ArticleFilter.filterArticleList(rows, false);
+                                    java.lang.reflect.Field[] fields = data.getClass().getDeclaredFields();
+                                    for (java.lang.reflect.Field field : fields) {
+                                        field.setAccessible(true);
+                                        if (field.getName().equals("rows") || field.getType().equals(List.class)) {
+                                            Object fieldValue = field.get(data);
+                                            if (fieldValue instanceof List) {
+                                                List<?> list = (List<?>) fieldValue;
+                                                Logger.info("  *** Found 'rows' field with " + list.size() + " items");
+                                                
+                                                if (!list.isEmpty()) {
+                                                    Object firstItem = list.get(0);
+                                                    Logger.info("  *** Row item type: " + firstItem.getClass().getName());
+                                                    
+                                                    // Try to filter
+                                                    ArticleFilter.filterArticleList(list, false);
+                                                }
+                                            }
                                         }
                                     }
                                 } catch (Exception e) {
-                                    Logger.debug("Failed to filter Repository response: " + e.getMessage());
+                                    Logger.debug("  Error processing: " + e.getMessage());
                                 }
                             }
                         }
@@ -190,9 +197,9 @@ public class XposedModule implements IXposedHookLoadPackage {
                 }
             );
             
-            Logger.info("Successfully hooked Repository ResponseResult");
+            Logger.info("Successfully hooked ResponseResult.setData with enhanced logging");
         } catch (Exception e) {
-            Logger.error("Failed to hook Repository (non-critical)", e);
+            Logger.error("Failed to hook ResponseResult", e);
         }
     }
     
