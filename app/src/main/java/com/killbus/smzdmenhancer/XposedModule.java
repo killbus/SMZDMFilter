@@ -2,9 +2,6 @@ package com.killbus.smzdmenhancer;
 
 import com.killbus.smzdmenhancer.utils.Logger;
 
-import org.json.JSONArray;
-import org.json.JSONObject;
-
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedHelpers;
@@ -76,134 +73,49 @@ public class XposedModule implements IXposedHookLoadPackage {
      */
     private void hookNetworkCallback(ClassLoader classLoader) {
         try {
-            // Hook the specific ViewModel's inner callback class
-            // From FollowSubRulesVM$a$a$a (the callback for /home/list request)
-            Class<?> followSubRulesVMClass = XposedHelpers.findClass(
-                "com.smzdm.client.android.module.guanzhu.subrules.FollowSubRulesVM",
-                classLoader
-            );
-            Logger.info("Found FollowSubRulesVM class: " + followSubRulesVMClass.getName());
+            // Hook the specific ViewModel's inner callback class which is obfuscated.
+            // From the decompiled source, the target class is named ea.d$a$a
+            String targetClassName = "ea.d$a$a";
+            Class<?> callbackClass = XposedHelpers.findClass(targetClassName, classLoader);
 
-            // Find the inner class that implements bm.e
-            // Pattern: FollowSubRulesVM$a$a$a implements bm.e<String>
-            Class<?>[] declaredClasses = followSubRulesVMClass.getDeclaredClasses();
-            Logger.info("Found " + declaredClasses.length + " inner classes in FollowSubRulesVM");
-            for (Class<?> innerClass : declaredClasses) {
-                Logger.info("Checking inner class: " + innerClass.getName());
-                // Check if this class implements bm.e
-                Class<?>[] interfaces = innerClass.getInterfaces();
-                boolean implementsCallback = false;
-                for (Class<?> iface : interfaces) {
-                    Logger.info("  - Implements interface: " + iface.getName());
-                    if (iface.getName().equals("bm.e")) {
-                        implementsCallback = true;
-                        break;
+            Logger.info("Found callback class: " + callbackClass.getName());
+
+            // Hook onSuccess method of this specific callback
+            XposedHelpers.findAndHookMethod(
+                callbackClass,
+                "onSuccess",
+                Object.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        Object response = param.args[0];
+                        
+                        if (response instanceof String) {
+                            String jsonStr = (String) response;
+                            Logger.info("*** Intercepted /home/list response, length: " + jsonStr.length());
+                            
+                            try {
+                                String filteredJson = ArticleFilter.filterJsonResponse(jsonStr);
+                                if (filteredJson != null && !filteredJson.equals(jsonStr)) {
+                                    param.args[0] = filteredJson;
+                                    Logger.info("*** Response filtered successfully");
+                                }
+                            } catch (Exception e) {
+                                Logger.error("Error filtering response", e);
+                            }
+                        } else {
+                            Logger.info("Intercepted response, but it's not a String. Type: " + (response == null ? "null" : response.getClass().getName()));
+                        }
                     }
                 }
-                
-                if (implementsCallback) {
-                    Logger.info("Found callback class: " + innerClass.getName());
-                    
-                    // Hook onSuccess method of this specific callback
-                    XposedHelpers.findAndHookMethod(
-                        innerClass,
-                        "onSuccess",
-                        Object.class,
-                        new XC_MethodHook() {
-                            @Override
-                            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                                Object response = param.args[0];
-                                
-                                if (response instanceof String) {
-                                    String jsonStr = (String) response;
-                                    Logger.info("*** Intercepted /home/list response, length: " + jsonStr.length());
-                                    
-                                    try {
-                                        String filteredJson = filterJsonResponse(jsonStr);
-                                        if (filteredJson != null && !filteredJson.equals(jsonStr)) {
-                                            param.args[0] = filteredJson;
-                                            Logger.info("*** Response filtered successfully");
-                                        }
-                                    } catch (Exception e) {
-                                        Logger.error("Error filtering response", e);
-                                    }
-                                }
-                            }
-                        }
-                    );
-                    Logger.info("Successfully hooked callback: " + innerClass.getName());
-                }
-            }
+            );
+            Logger.info("Successfully hooked callback: " + callbackClass.getName());
             
         } catch (Exception e) {
             Logger.error("Failed to hook FollowSubRulesVM callback", e);
         }
     }
     
-    /**
-     * Filter JSON response string
-     * Removes articles that don't meet the criteria
-     */
-    private String filterJsonResponse(String jsonStr) {
-        try {
-            JSONObject root = new JSONObject(jsonStr);
-            
-            // Check if this has the expected structure
-            if (!root.has("data")) {
-                return null;
-            }
-            
-            JSONObject data = root.getJSONObject("data");
-            if (!data.has("rows")) {
-                return null;
-            }
-            
-            JSONArray rows = data.getJSONArray("rows");
-            JSONArray filteredRows = new JSONArray();
-            
-            int totalDropped = 0;
-            
-            for (int i = 0; i < rows.length(); i++) {
-                JSONObject article = rows.getJSONObject(i);
-                
-                // Check comment count
-                int commentCount = 0;
-                if (article.has("article_comment")) {
-                    String commentStr = article.optString("article_comment", "0");
-                    try {
-                        commentCount = Integer.parseInt(commentStr);
-                    } catch (NumberFormatException e) {
-                        // Ignore
-                    }
-                }
-                
-                // Filter by comment threshold
-                if (commentCount >= Config.COMMENT_THRESHOLD) {
-                    filteredRows.put(article);
-                } else {
-                    String title = article.optString("article_title", "Unknown");
-                    String id = article.optString("article_id", "N/A");
-                    Logger.logDroppedArticle(title, id, "JSONFilter");
-                    totalDropped++;
-                }
-            }
-            
-            if (totalDropped > 0) {
-                Logger.info(String.format("Filtered JSON: %d dropped, %d kept", 
-                    totalDropped, filteredRows.length()));
-                
-                // Update the rows array
-                data.put("rows", filteredRows);
-                return root.toString();
-            }
-            
-            return null; // No changes
-            
-        } catch (Exception e) {
-            Logger.error("Error parsing/filtering JSON", e);
-            return null;
-        }
-    }
     
     /**
      * Show Toast notification in the target app

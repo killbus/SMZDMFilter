@@ -2,6 +2,9 @@ package com.killbus.smzdmenhancer;
 
 import com.killbus.smzdmenhancer.utils.Logger;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.util.Iterator;
 import java.util.List;
 
@@ -10,6 +13,79 @@ import java.util.List;
  * Based on the Rhino script functionality
  */
 public class ArticleFilter {
+
+    /**
+     * Filter a JSON response string based on various criteria.
+     * This method is used for direct response hooking before JSON deserialization.
+     *
+     * @param jsonStr The raw JSON response string.
+     * @return The filtered JSON string, or null if no changes were made.
+     */
+    public static String filterJsonResponse(String jsonStr) {
+        try {
+            JSONObject root = new JSONObject(jsonStr);
+
+            if (!root.has("data")) return null;
+            JSONObject data = root.getJSONObject("data");
+            if (!data.has("rows")) return null;
+
+            JSONArray rows = data.getJSONArray("rows");
+            JSONArray filteredRows = new JSONArray();
+            int totalDropped = 0;
+
+            for (int i = 0; i < rows.length(); i++) {
+                JSONObject article = rows.getJSONObject(i);
+                boolean shouldFilter = false;
+                String filterReason = "";
+
+                // Check comment count
+                int commentCount = 0;
+                if (article.has("article_comment")) {
+                    String commentStr = article.optString("article_comment", "0");
+                    try {
+                        commentCount = Integer.parseInt(commentStr);
+                    } catch (NumberFormatException e) {
+                        // Ignore
+                    }
+                }
+
+                if (commentCount < Config.COMMENT_THRESHOLD) {
+                    shouldFilter = true;
+                    filterReason = "comments:" + commentCount;
+                }
+
+                if (shouldFilter) {
+                    String title = article.optString("article_title", "Unknown");
+                    String id = article.optString("article_id", "N/A");
+                    Logger.logDroppedArticle(title, id, "JSONFilter[" + filterReason + "]");
+                    totalDropped++;
+                } else {
+                    filteredRows.put(article);
+                }
+            }
+
+            if (totalDropped > 0) {
+                Logger.info(String.format("Filtered JSON: %d dropped, %d kept",
+                    totalDropped, filteredRows.length()));
+
+                // If all articles were dropped, add the last one back to prevent breaking the UI
+                if (filteredRows.length() == 0 && rows.length() > 0) {
+                    JSONObject lastArticle = rows.getJSONObject(rows.length() - 1);
+                    filteredRows.put(lastArticle);
+                    String title = lastArticle.optString("article_title", "Unknown");
+                    Logger.info("All articles dropped, keeping the last one to prevent UI issues: " + title);
+                }
+
+                data.put("rows", filteredRows);
+                return root.toString();
+            }
+
+            return null; // No changes
+        } catch (Exception e) {
+            Logger.error("Error parsing/filtering JSON", e);
+            return null;
+        }
+    }
     
     /**
      * Filter a list of FollowItemBean objects based on comment count
